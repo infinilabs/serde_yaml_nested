@@ -16,14 +16,19 @@ const DOT: &'static str = ".";
 /// # use serde_yaml_nested::conversion::flatten;
 /// # use std::collections::BTreeMap;
 /// let nested: Value = from_str(
-/// r#"
+///     r#"
 /// a:  
 ///   b:
 ///     c: null
-/// "#).unwrap();
+/// "#,
+/// )
+/// .unwrap();
 ///
 /// let flattened = flatten(nested);
-/// assert_eq!(flattened, BTreeMap::from([(String::from("a.b.c"), Value::Null)]));
+/// assert_eq!(
+///     flattened,
+///     BTreeMap::from([(String::from("a.b.c"), Value::Null)])
+/// );
 /// ```
 pub fn flatten(input: Value) -> BTreeMap<String, Value> {
     let mut output = BTreeMap::new();
