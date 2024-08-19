@@ -4,7 +4,7 @@
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 
-const DOT: &'static str = ".";
+const DOT: &str = ".";
 
 /// Flattens the `input` YAML value.
 ///
