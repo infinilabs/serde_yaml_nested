@@ -365,7 +365,6 @@ str:
 "#;
 
         let yaml = from_str::<Value>(&yaml_str).unwrap();
-        println!("DBG: {:#?}", yaml);
         let flattened = flatten(yaml);
 
         let expected = BTreeMap::from([
@@ -472,6 +471,98 @@ str:
             (String::from("str.str.str3"), Value::Number(Number::from(1))),
             (String::from("str.str.str4"), Value::String("hello".into())),
         ]);
+        assert_eq!(flattened, expected);
+    }
+
+    #[test]
+    fn partially_flattened() {
+        let yaml_str = r#"
+cluster.fault_detection:
+  follower_check:
+    interval: 1000
+    retry: 3
+  master_check:
+    interval: 500
+    retry: 9
+routing.allocation.same_shard.host: false"#;
+        let yaml: Value = from_str(&yaml_str).unwrap();
+        let flattened = flatten(yaml);
+        let expected = BTreeMap::from([
+            (
+                String::from("cluster.fault_detection.follower_check.interval"),
+                Value::Number(Number::from(1000)),
+            ),
+            (
+                String::from("cluster.fault_detection.follower_check.retry"),
+                Value::Number(Number::from(3)),
+            ),
+            (
+                String::from("cluster.fault_detection.master_check.interval"),
+                Value::Number(Number::from(500)),
+            ),
+            (
+                String::from("cluster.fault_detection.master_check.retry"),
+                Value::Number(Number::from(9)),
+            ),
+            (
+                String::from("routing.allocation.same_shard.host"),
+                Value::Bool(false),
+            ),
+        ]);
+
+        assert_eq!(flattened, expected);
+    }
+
+    #[test]
+    fn totally_flattened() {
+        let yaml_str = r#"
+action.auto_create_index: true
+action.destructive_requires_name: true
+action.search.pre_filter_shard_size.default: 128
+action.search.shard_count.limit: 9223372036854775807
+async_search.index_cleanup_interval: 1h
+bootstrap.ctrlhandler: true
+bootstrap.memory_lock: false
+cache.recycler.page.limit.heap: 10%
+cache.recycler.page.type: CONCURRENT
+cache.recycler.page.weight.bytes: 1.0"#;
+        let yaml: Value = from_str(&yaml_str).unwrap();
+        let flattened = flatten(yaml);
+
+        let expected = BTreeMap::from([
+            (String::from("action.auto_create_index"), Value::Bool(true)),
+            (
+                String::from("action.destructive_requires_name"),
+                Value::Bool(true),
+            ),
+            (
+                String::from("action.search.pre_filter_shard_size.default"),
+                Value::Number(128.into()),
+            ),
+            (
+                String::from("action.search.shard_count.limit"),
+                Value::Number(Number::from(9223372036854775807_u64)),
+            ),
+            (
+                String::from("async_search.index_cleanup_interval"),
+                Value::String("1h".into()),
+            ),
+            (String::from("bootstrap.ctrlhandler"), Value::Bool(true)),
+            (String::from("bootstrap.memory_lock"), Value::Bool(false)),
+            (
+                String::from("cache.recycler.page.limit.heap"),
+                Value::String("10%".into()),
+            ),
+            (
+                String::from("cache.recycler.page.type"),
+                Value::String("CONCURRENT".into()),
+            ),
+            (
+                String::from("cache.recycler.page.weight.bytes"),
+                Value::Number(Number::from(1.0)),
+            ),
+        ]);
+
         assert_eq!(flattened, expected);
     }
 }
