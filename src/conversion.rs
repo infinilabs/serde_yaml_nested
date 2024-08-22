@@ -1,6 +1,7 @@
 //! This module provides [`flatten()`] and [`unflatten()`] to do the conversions
 //! between nested and flattened YAML values.
 
+use serde_yaml_ng::Mapping;
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 
@@ -80,6 +81,112 @@ fn _flatten(output: &mut BTreeMap<String, Value>, path: &mut Vec<String>, input:
     }
 }
 
+/// The errors that may happen during conversion.
+#[derive(Debug, PartialEq, Clone)]
+pub enum Error {
+    DuplicateValue { key: String, token: String },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateValue { key, token } => {
+                write!(
+                    f,
+                    "while handling key '{}', found a token '{}' that has at least 2 values",
+                    key, token
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// Unflattens the given `input` YAML.
+///
+/// # Examples
+///
+/// ```rust
+/// # use serde_yaml_ng::from_str;
+/// # use serde_yaml_ng::Value;
+/// # use serde_yaml_nested::conversion::unflatten;
+/// let flattened: Value = from_str(r#"a.b.c: null"#).unwrap();
+/// let mapping = match flattened {
+///     Value::Mapping(mapping) => mapping,
+///     _ => unreachable!(),
+/// };
+///
+/// let nested = unflatten(
+///     mapping
+///         .into_iter()
+///         .map(|(key, value)| (key.as_str().unwrap().to_string(), value)),
+/// )
+/// .unwrap();
+///
+/// let expected: Value = from_str(
+///     r#"
+/// a:
+///   b:
+///     c: null"#,
+/// )
+/// .unwrap();
+/// assert_eq!(nested, expected);
+/// ```
+pub fn unflatten<I: IntoIterator<Item = (String, Value)>>(input: I) -> Result<Value, Error> {
+    let mut mapping = Mapping::new();
+    for (key, value) in input {
+        let mut split_by_dot = key.split(DOT).peekable();
+
+        let mut outermost_mapping = &mut mapping;
+        'inner: loop {
+            let token_str = split_by_dot
+                .next()
+                .expect("should be Some, guarded by last iteration");
+            let token = Value::String(token_str.into());
+
+            let key_is_last_key = split_by_dot.peek().is_none();
+
+            // We use `.get(&self)` to acquire if this key exists or not
+            // cannot use `.get_mut(&mut self)` as that will borrow
+            // `outermost_mapping` for more than once.
+            let exist = outermost_mapping.get(&token).is_some();
+
+            if exist {
+                let existing = outermost_mapping
+                    .get_mut(&token)
+                    .expect("should be Some as `exist` is true");
+                if key_is_last_key {
+                    return Err(Error::DuplicateValue {
+                        key: key.clone(),
+                        token: token_str.to_string(),
+                    });
+                } else if let Value::Mapping(new_mapping) = existing {
+                    outermost_mapping = new_mapping;
+                } else {
+                    return Err(Error::DuplicateValue {
+                        key: key.clone(),
+                        token: token_str.to_string(),
+                    });
+                }
+            } else if key_is_last_key {
+                outermost_mapping.insert(token, value);
+                break 'inner;
+            } else {
+                outermost_mapping.insert(token.clone(), Value::Mapping(Mapping::new()));
+                let newly_inserted_mapping = outermost_mapping
+                    .get_mut(&token)
+                    .unwrap()
+                    .as_mapping_mut()
+                    .unwrap();
+                outermost_mapping = newly_inserted_mapping;
+            }
+        }
+    }
+
+    Ok(Value::Mapping(mapping))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,7 +196,7 @@ mod tests {
     use serde_yaml_ng::Value;
 
     #[test]
-    fn one_layer() {
+    fn test_flatten_one_layer() {
         let bool_null = "true: null";
         let yaml = from_str::<Value>(&bool_null).unwrap();
         let flattened = flatten(yaml);
@@ -151,7 +258,7 @@ str4: hello
     }
 
     #[test]
-    fn two_layers() {
+    fn teset_flatten_two_layers() {
         let yaml_str = r#"
 true:
   true: true
@@ -236,7 +343,7 @@ str:
     }
 
     #[test]
-    fn three_layers() {
+    fn test_flatten_three_layers() {
         let yaml_str = r#"
 true:
   true:
@@ -475,7 +582,7 @@ str:
     }
 
     #[test]
-    fn partially_flattened() {
+    fn test_flatten_partially_flattened() {
         let yaml_str = r#"
 cluster.fault_detection:
   follower_check:
@@ -514,7 +621,7 @@ routing.allocation.same_shard.host: false"#;
     }
 
     #[test]
-    fn totally_flattened() {
+    fn test_flatten_totally_flattened() {
         let yaml_str = r#"
 action.auto_create_index: true
 action.destructive_requires_name: true
@@ -564,5 +671,121 @@ cache.recycler.page.weight.bytes: 1.0"#;
         ]);
 
         assert_eq!(flattened, expected);
+    }
+
+    #[test]
+    fn test_unflatten_one_layer() {
+        let nested = unflatten([
+            ("a".into(), Value::Null),
+            ("b".into(), Value::Bool(false)),
+            ("c".into(), Value::Number(Number::from(1))),
+            ("d".into(), Value::String("hello".into())),
+        ])
+        .unwrap();
+        let expected_mapping: Mapping = [
+            (Value::String("a".into()), Value::Null),
+            (Value::String("b".into()), Value::Bool(false)),
+            (Value::String("c".into()), Value::Number(Number::from(1))),
+            (Value::String("d".into()), Value::String("hello".into())),
+        ]
+        .into_iter()
+        .collect();
+
+        let expected = Value::Mapping(expected_mapping);
+        assert_eq!(expected, nested);
+    }
+
+    #[test]
+    fn test_unflatten_two_layers() {
+        let nested = unflatten([
+            ("a.a".into(), Value::Null),
+            ("a.b".into(), Value::Bool(false)),
+            ("a.c".into(), Value::Number(Number::from(1))),
+            ("a.d".into(), Value::String("hello".into())),
+        ])
+        .unwrap();
+
+        let inner_mapping: Mapping = [
+            (Value::String("a".into()), Value::Null),
+            (Value::String("b".into()), Value::Bool(false)),
+            (Value::String("c".into()), Value::Number(Number::from(1))),
+            (Value::String("d".into()), Value::String("hello".into())),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut expected_mapping = Mapping::new();
+        expected_mapping.insert(Value::String("a".into()), Value::Mapping(inner_mapping));
+
+        let expected = Value::Mapping(expected_mapping);
+        assert_eq!(expected, nested);
+    }
+
+    #[test]
+    fn test_unflatten_three_layers() {
+        let nested = unflatten([
+            ("a.a.a".into(), Value::Null),
+            ("a.a.b".into(), Value::Bool(false)),
+            ("a.a.c".into(), Value::Number(Number::from(1))),
+            ("a.a.d".into(), Value::String("hello".into())),
+        ])
+        .unwrap();
+
+        let innermost_mapping: Mapping = [
+            (Value::String("a".into()), Value::Null),
+            (Value::String("b".into()), Value::Bool(false)),
+            (Value::String("c".into()), Value::Number(Number::from(1))),
+            (Value::String("d".into()), Value::String("hello".into())),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut middle_mapping = Mapping::new();
+        middle_mapping.insert(Value::String("a".into()), Value::Mapping(innermost_mapping));
+
+        let mut expected_mapping = Mapping::new();
+        expected_mapping.insert(Value::String("a".into()), Value::Mapping(middle_mapping));
+
+        let expected = Value::Mapping(expected_mapping);
+        assert_eq!(expected, nested);
+    }
+
+    #[test]
+    fn test_unflatten_duplicate_value() {
+        let error =
+            unflatten([("a".into(), Value::Null), ("a".into(), Value::Bool(false))]).unwrap_err();
+        assert_eq!(
+            error,
+            Error::DuplicateValue {
+                key: "a".into(),
+                token: "a".into()
+            }
+        );
+
+        let error = unflatten([
+            ("a.b".into(), Value::Null),
+            ("a.b.c".into(), Value::Bool(false)),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            Error::DuplicateValue {
+                key: "a.b.c".into(),
+                token: "b".into()
+            }
+        );
+
+        let error = unflatten([
+            ("a.b.c".into(), Value::Null),
+            ("a.b".into(), Value::Bool(false)),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            Error::DuplicateValue {
+                key: "a.b".into(),
+                token: "b".into()
+            }
+        );
     }
 }
